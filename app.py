@@ -175,16 +175,40 @@ def aplicar_filtros(df):
     return df_filtrado
 
 
-def gerar_wordcloud(texto):
-    stopwords_pt = {
-        "de", "da", "do", "das", "dos", "e", "em", "a", "o", "as", "os",
-        "para", "por", "com", "sem", "um", "uma", "que", "não", "na", "no",
-        "nas", "nos", "ao", "aos", "às", "como", "mais", "menos", "já",
-        "foi", "ser", "tem", "tinha", "meu", "minha", "seu", "sua", "pra",
-        "porque", "quando", "onde", "sobre", "muito", "muita", "muitas",
-        "muitos", "ainda", "após", "depois", "antes"
-    }
+def filtrar_iqr(df, coluna="TAMANHO_TEXTO"):
+    q1 = df[coluna].quantile(0.25)
+    q3 = df[coluna].quantile(0.75)
+    iqr = q3 - q1
+    return df[(df[coluna] >= q1 - 1.5 * iqr) & (df[coluna] <= q3 + 1.5 * iqr)]
 
+stopwords_pt = {
+    "de", "a", "o", "que", "e", "do", "da", "em", "um", "para", "é", "com",
+    "não", "uma", "os", "no", "se", "na", "por", "mais", "as", "dos", "como",
+    "mas", "foi", "ao", "ele", "das", "tem", "à", "seu", "sua", "ou", "ser",
+    "quando", "muito", "há", "nos", "já", "está", "eu", "também", "só", "pelo",
+    "pela", "até", "isso", "ela", "entre", "era", "depois", "sem", "mesmo",
+    "aos", "ter", "seus", "quem", "nas", "me", "esse", "eles", "estão", "você",
+    "tinha", "foram", "essa", "num", "nem", "suas", "meu", "às", "minha",
+    "têm", "numa", "pelos", "elas", "havia", "seja", "qual", "será", "nós",
+    "tenho", "lhe", "deles", "essas", "esses", "pelas", "este", "fosse",
+    "dele", "tu", "te", "vocês", "vos", "lhes", "meus", "minhas", "teu",
+    "tua", "teus", "tuas", "nosso", "nossa", "nossos", "nossas", "dela",
+    "delas", "esta", "estes", "estas", "aquele", "aquela", "aqueles",
+    "aquelas", "isto", "aquilo", "estou", "está", "estamos", "estão",
+    "estive", "esteve", "estivemos", "estiveram", "estava", "estávamos",
+    "estavam", "estivera", "estivéramos", "esteja", "estejamos", "estejam",
+    "estivesse", "estivéssemos", "estivessem", "estiver", "estivermos",
+    "estiverem", "hei", "há", "havemos", "hão", "houve", "houvemos",
+    "houveram", "houvera", "houvéramos", "haja", "hajamos", "hajam",
+    "houvesse", "houvéssemos", "houvessem", "houver", "houvermos",
+    "houverem", "houverei", "houverá", "houveremos", "houverão",
+    "houveria", "houveríamos", "houveriam", "sou", "somos", "são", "era",
+    "éramos", "eram", "fui", "fomos", "foram", "fora", "fôramos",
+    "ainda", "dia", "dias", "pois", "onde", "todo", "toda", "todos", "todas",
+    "nao", "porque", "sobre", "pode", "fazer", "vez", "bem", "aqui",
+}
+
+def gerar_wordcloud(texto):
     wc = WordCloud(
         width=1200,
         height=500,
@@ -234,7 +258,7 @@ if df_filtrado["DATA"].notna().any():
         .sum()
         .sort_values("DATA")
     )
-    serie["MEDIA_MOVEL_7"] = serie["CASOS"].rolling(7, min_periods=1).mean()
+    serie["MEDIA_MOVEL_3"] = serie["CASOS"].rolling(3, min_periods=1).mean()
 
     fig_tempo = go.Figure()
     fig_tempo.add_trace(go.Scatter(
@@ -245,9 +269,9 @@ if df_filtrado["DATA"].notna().any():
     ))
     fig_tempo.add_trace(go.Scatter(
         x=serie["DATA"],
-        y=serie["MEDIA_MOVEL_7"],
+        y=serie["MEDIA_MOVEL_3"],
         mode="lines",
-        name="Média móvel (7)"
+        name="Média móvel (3)"
     ))
     fig_tempo.update_layout(
         height=420,
@@ -354,20 +378,26 @@ with col4:
 col5, col6 = st.columns(2)
 
 with col5:
-    st.subheader("Tamanho do texto por status")
+    st.subheader("Análise de Densidade: Tamanho do Texto por Status")
 
-    fig_box = px.box(
-        df_filtrado,
+    df_iqr = filtrar_iqr(df_filtrado)
+
+    fig_violin = px.violin(
+        df_iqr,
         x="STATUS",
         y="TAMANHO_TEXTO",
-        points="outliers"
+        color="STATUS",
+        color_discrete_sequence=px.colors.sequential.Viridis,
+        box=True,
     )
-    fig_box.update_layout(
-        height=450,
-        xaxis_title="Status",
-        yaxis_title="Quantidade de caracteres"
+    fig_violin.update_layout(
+        height=500,
+        xaxis_title="Status da Reclamação",
+        yaxis_title="Quantidade de Caracteres",
+        showlegend=False,
     )
-    st.plotly_chart(fig_box, width="stretch")
+    fig_violin.update_xaxes(tickangle=45)
+    st.plotly_chart(fig_violin, width="stretch")
 
 with col6:
     st.subheader("Distribuição do tamanho das reclamações")
