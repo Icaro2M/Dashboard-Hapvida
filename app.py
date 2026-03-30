@@ -16,6 +16,22 @@ st.set_page_config(
 CSV_PATH = "dados/RECLAMEAQUI_HAPVIDA.csv"
 SHP_PATH = "assets/mapa_brasil/BR_UF_2024.shp"
 
+CATEGORY_COLUMNS = [
+    "Administrativo",
+    "Atraso na entrega",
+    "Clínicas Médicas",
+    "Cobrança indevida",
+    "Demora para autorização de consultas, exames e cirurgias",
+    "Dificuldade para agendamento de exames-consultas",
+    "Exames Lab e imagens",
+    "Mau Atendimento",
+    "Problemas de infraestrutura",
+    "Qualidade do serviço",
+    "Qualidade do serviço prestado",
+    "Rede de Atendimento",
+    "Reembolso de pagamento"
+]
+
 
 @st.cache_data
 def carregar_dados():
@@ -23,9 +39,9 @@ def carregar_dados():
         raise FileNotFoundError(f"Arquivo não encontrado: {CSV_PATH}")
 
     df = pd.read_csv(CSV_PATH)
-    df.columns = [c.strip().upper() for c in df.columns]
+    df.columns = [c.strip() for c in df.columns]
 
-    # Garantias mínimas
+    # Campos principais
     if "STATUS" not in df.columns:
         df["STATUS"] = "Não informado"
     df["STATUS"] = df["STATUS"].fillna("Não informado").astype(str).str.strip()
@@ -47,26 +63,52 @@ def carregar_dados():
     df["TAMANHO_TEXTO"] = pd.to_numeric(df["TAMANHO_TEXTO"], errors="coerce").fillna(0)
 
     if "CATEGORIA_AJUSTADA" not in df.columns:
-        df["CATEGORIA_AJUSTADA"] = "Não informada"
-    df["CATEGORIA_AJUSTADA"] = df["CATEGORIA_AJUSTADA"].fillna("Não informada").astype(str).str.strip()
+        df["CATEGORIA_AJUSTADA"] = ""
+    df["CATEGORIA_AJUSTADA"] = df["CATEGORIA_AJUSTADA"].fillna("").astype(str).str.strip()
 
     # Padronização de estado
     mapa_estados = {
-        "ACRE": "AC", "ALAGOAS": "AL", "AMAPÁ": "AP", "AMAPA": "AP",
-        "AMAZONAS": "AM", "BAHIA": "BA", "CEARÁ": "CE", "CEARA": "CE",
-        "DISTRITO FEDERAL": "DF", "ESPÍRITO SANTO": "ES", "ESPIRITO SANTO": "ES",
-        "GOIÁS": "GO", "GOIAS": "GO", "MARANHÃO": "MA", "MARANHAO": "MA",
-        "MATO GROSSO": "MT", "MATO GROSSO DO SUL": "MS", "MINAS GERAIS": "MG",
-        "PARÁ": "PA", "PARA": "PA", "PARAÍBA": "PB", "PARAIBA": "PB",
-        "PARANÁ": "PR", "PARANA": "PR", "PERNAMBUCO": "PE", "PIAUÍ": "PI",
-        "PIAUI": "PI", "RIO DE JANEIRO": "RJ", "RIO GRANDE DO NORTE": "RN",
-        "RIO GRANDE DO SUL": "RS", "RONDÔNIA": "RO", "RONDONIA": "RO",
-        "RORAIMA": "RR", "SANTA CATARINA": "SC", "SÃO PAULO": "SP",
-        "SAO PAULO": "SP", "SERGIPE": "SE", "TOCANTINS": "TO"
+        "ACRE": "AC",
+        "ALAGOAS": "AL",
+        "AMAPÁ": "AP",
+        "AMAPA": "AP",
+        "AMAZONAS": "AM",
+        "BAHIA": "BA",
+        "CEARÁ": "CE",
+        "CEARA": "CE",
+        "DISTRITO FEDERAL": "DF",
+        "ESPÍRITO SANTO": "ES",
+        "ESPIRITO SANTO": "ES",
+        "GOIÁS": "GO",
+        "GOIAS": "GO",
+        "MARANHÃO": "MA",
+        "MARANHAO": "MA",
+        "MATO GROSSO": "MT",
+        "MATO GROSSO DO SUL": "MS",
+        "MINAS GERAIS": "MG",
+        "PARÁ": "PA",
+        "PARA": "PA",
+        "PARAÍBA": "PB",
+        "PARAIBA": "PB",
+        "PARANÁ": "PR",
+        "PARANA": "PR",
+        "PERNAMBUCO": "PE",
+        "PIAUÍ": "PI",
+        "PIAUI": "PI",
+        "RIO DE JANEIRO": "RJ",
+        "RIO GRANDE DO NORTE": "RN",
+        "RIO GRANDE DO SUL": "RS",
+        "RONDÔNIA": "RO",
+        "RONDONIA": "RO",
+        "RORAIMA": "RR",
+        "SANTA CATARINA": "SC",
+        "SÃO PAULO": "SP",
+        "SAO PAULO": "SP",
+        "SERGIPE": "SE",
+        "TOCANTINS": "TO"
     }
     df["ESTADO"] = df["ESTADO"].replace(mapa_estados)
 
-    # Remover estados inválidos
     estados_invalidos = {"--", "- - --", "NAN", "NONE", "", "NÃO INFORMADO", "NAO INFORMADO"}
     df = df[~df["ESTADO"].isin(estados_invalidos)].copy()
 
@@ -81,6 +123,9 @@ def carregar_dados():
             errors="coerce"
         )
     else:
+        df["ANO"] = pd.NA
+        df["MES"] = pd.NA
+        df["DIA"] = pd.NA
         df["DATA"] = pd.NaT
 
     if df["DATA"].notna().any():
@@ -88,6 +133,7 @@ def carregar_dados():
     else:
         df["ANO_MES"] = None
 
+    # Faixas de texto
     bins = [0, 200, 500, 1000, 2000, 999999]
     labels = [
         "Muito curto (0-200)",
@@ -103,6 +149,11 @@ def carregar_dados():
         include_lowest=True
     )
 
+    # Categorias binárias
+    for col in CATEGORY_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
     return df
 
 
@@ -114,9 +165,8 @@ def carregar_mapa_ibge():
     gdf = gpd.read_file(SHP_PATH)
     gdf = gdf.set_geometry(gdf.geometry.name)
 
-    # Renomeia colunas sem quebrar a geometria
-    col_geom = gdf.geometry.name
-    rename_map = {c: c.upper() for c in gdf.columns if c != col_geom}
+    geom_col = gdf.geometry.name
+    rename_map = {c: c.upper() for c in gdf.columns if c != geom_col}
     gdf = gdf.rename(columns=rename_map)
 
     if "SIGLA_UF" in gdf.columns:
@@ -125,17 +175,44 @@ def carregar_mapa_ibge():
         gdf["ESTADO"] = gdf["SIGLA"].astype(str).str.upper()
     elif "NM_UF" in gdf.columns:
         nome_para_sigla = {
-            "ACRE": "AC", "ALAGOAS": "AL", "AMAPÁ": "AP", "AMAPA": "AP",
-            "AMAZONAS": "AM", "BAHIA": "BA", "CEARÁ": "CE", "CEARA": "CE",
-            "DISTRITO FEDERAL": "DF", "ESPÍRITO SANTO": "ES", "ESPIRITO SANTO": "ES",
-            "GOIÁS": "GO", "GOIAS": "GO", "MARANHÃO": "MA", "MARANHAO": "MA",
-            "MATO GROSSO": "MT", "MATO GROSSO DO SUL": "MS", "MINAS GERAIS": "MG",
-            "PARÁ": "PA", "PARA": "PA", "PARAÍBA": "PB", "PARAIBA": "PB",
-            "PARANÁ": "PR", "PARANA": "PR", "PERNAMBUCO": "PE", "PIAUÍ": "PI",
-            "PIAUI": "PI", "RIO DE JANEIRO": "RJ", "RIO GRANDE DO NORTE": "RN",
-            "RIO GRANDE DO SUL": "RS", "RONDÔNIA": "RO", "RONDONIA": "RO",
-            "RORAIMA": "RR", "SANTA CATARINA": "SC", "SÃO PAULO": "SP",
-            "SAO PAULO": "SP", "SERGIPE": "SE", "TOCANTINS": "TO"
+            "ACRE": "AC",
+            "ALAGOAS": "AL",
+            "AMAPÁ": "AP",
+            "AMAPA": "AP",
+            "AMAZONAS": "AM",
+            "BAHIA": "BA",
+            "CEARÁ": "CE",
+            "CEARA": "CE",
+            "DISTRITO FEDERAL": "DF",
+            "ESPÍRITO SANTO": "ES",
+            "ESPIRITO SANTO": "ES",
+            "GOIÁS": "GO",
+            "GOIAS": "GO",
+            "MARANHÃO": "MA",
+            "MARANHAO": "MA",
+            "MATO GROSSO": "MT",
+            "MATO GROSSO DO SUL": "MS",
+            "MINAS GERAIS": "MG",
+            "PARÁ": "PA",
+            "PARA": "PA",
+            "PARAÍBA": "PB",
+            "PARAIBA": "PB",
+            "PARANÁ": "PR",
+            "PARANA": "PR",
+            "PERNAMBUCO": "PE",
+            "PIAUÍ": "PI",
+            "PIAUI": "PI",
+            "RIO DE JANEIRO": "RJ",
+            "RIO GRANDE DO NORTE": "RN",
+            "RIO GRANDE DO SUL": "RS",
+            "RONDÔNIA": "RO",
+            "RONDONIA": "RO",
+            "RORAIMA": "RR",
+            "SANTA CATARINA": "SC",
+            "SÃO PAULO": "SP",
+            "SAO PAULO": "SP",
+            "SERGIPE": "SE",
+            "TOCANTINS": "TO"
         }
         gdf["ESTADO"] = gdf["NM_UF"].astype(str).str.upper().map(nome_para_sigla)
     else:
@@ -150,14 +227,14 @@ def aplicar_filtros(df):
     anos = sorted([int(a) for a in df["ANO"].dropna().unique().tolist()]) if "ANO" in df.columns else []
     estados = sorted(df["ESTADO"].dropna().unique().tolist())
     status_list = sorted(df["STATUS"].dropna().unique().tolist())
-    categorias = sorted(df["CATEGORIA_AJUSTADA"].dropna().unique().tolist())
     faixas = sorted([str(f) for f in df["FAIXA_TEXTO"].dropna().unique().tolist()])
+    categorias_disponiveis = [col for col in CATEGORY_COLUMNS if col in df.columns]
 
     anos_sel = st.sidebar.multiselect("Ano", anos, default=anos)
     estados_sel = st.sidebar.multiselect("Estado", estados, default=estados)
     status_sel = st.sidebar.multiselect("Status", status_list, default=status_list)
-    categorias_sel = st.sidebar.multiselect("Categoria ajustada", categorias, default=categorias)
     faixas_sel = st.sidebar.multiselect("Faixa do tamanho do texto", faixas, default=faixas)
+    categorias_sel = st.sidebar.multiselect("Categoria", categorias_disponiveis, default=[])
 
     df_filtrado = df.copy()
 
@@ -167,10 +244,11 @@ def aplicar_filtros(df):
         df_filtrado = df_filtrado[df_filtrado["ESTADO"].isin(estados_sel)]
     if status_sel:
         df_filtrado = df_filtrado[df_filtrado["STATUS"].isin(status_sel)]
-    if categorias_sel:
-        df_filtrado = df_filtrado[df_filtrado["CATEGORIA_AJUSTADA"].isin(categorias_sel)]
     if faixas_sel:
         df_filtrado = df_filtrado[df_filtrado["FAIXA_TEXTO"].astype(str).isin(faixas_sel)]
+    if categorias_sel:
+        mascara_categoria = df_filtrado[categorias_sel].sum(axis=1) > 0
+        df_filtrado = df_filtrado[mascara_categoria]
 
     return df_filtrado
 
@@ -214,6 +292,7 @@ if df_filtrado.empty:
     st.warning("Os filtros selecionados não retornaram registros.")
     st.stop()
 
+# KPIs
 total_reclamacoes = int(df_filtrado["CASOS"].sum())
 total_estados = df_filtrado["ESTADO"].nunique()
 status_mais_comum = df_filtrado["STATUS"].mode()[0] if not df_filtrado.empty else "-"
@@ -225,6 +304,7 @@ c2.metric("Estados com ocorrência", total_estados)
 c3.metric("Status mais comum", status_mais_comum)
 c4.metric("Média de caracteres", media_tamanho)
 
+# Evolução temporal
 st.subheader("Evolução temporal das reclamações")
 
 if df_filtrado["DATA"].notna().any():
@@ -234,6 +314,7 @@ if df_filtrado["DATA"].notna().any():
         .sum()
         .sort_values("DATA")
     )
+
     serie["MEDIA_MOVEL_7"] = serie["CASOS"].rolling(7, min_periods=1).mean()
 
     fig_tempo = go.Figure()
@@ -258,6 +339,7 @@ if df_filtrado["DATA"].notna().any():
 else:
     st.info("Não há datas válidas para gerar a série temporal.")
 
+# Mapa e ranking
 col1, col2 = st.columns(2)
 
 with col1:
@@ -306,6 +388,7 @@ with col2:
     )
     st.plotly_chart(fig_estados, width="stretch")
 
+# Status e categorias
 col3, col4 = st.columns(2)
 
 with col3:
@@ -327,19 +410,23 @@ with col3:
     st.plotly_chart(fig_status, width="stretch")
 
 with col4:
-    st.subheader("Categorias ajustadas mais frequentes")
+    st.subheader("Categorias mais frequentes")
+
+    categorias_validas = [col for col in CATEGORY_COLUMNS if col in df_filtrado.columns]
 
     cat_df = (
-        df_filtrado.groupby("CATEGORIA_AJUSTADA", as_index=False)["CASOS"]
+        df_filtrado[categorias_validas]
         .sum()
-        .sort_values("CASOS", ascending=False)
+        .sort_values(ascending=False)
         .head(10)
+        .reset_index()
     )
+    cat_df.columns = ["CATEGORIA", "CASOS"]
 
     fig_cat = px.bar(
         cat_df,
         x="CASOS",
-        y="CATEGORIA_AJUSTADA",
+        y="CATEGORIA",
         orientation="h",
         text_auto=True
     )
@@ -351,6 +438,7 @@ with col4:
     fig_cat.update_yaxes(categoryorder="total ascending")
     st.plotly_chart(fig_cat, width="stretch")
 
+# Tamanho dos textos
 col5, col6 = st.columns(2)
 
 with col5:
@@ -386,6 +474,7 @@ with col6:
     )
     st.plotly_chart(fig_hist, width="stretch")
 
+# Evolução mensal por status
 st.subheader("Evolução mensal por status")
 
 if df_filtrado["ANO_MES"].notna().any():
@@ -411,6 +500,7 @@ if df_filtrado["ANO_MES"].notna().any():
 else:
     st.info("Não há datas válidas para gerar a evolução mensal.")
 
+# Wordcloud
 st.subheader("WordCloud das descrições")
 
 texto_total = " ".join(df_filtrado["DESCRICAO"].dropna().astype(str).tolist()).strip()
@@ -421,12 +511,21 @@ if texto_total:
 else:
     st.info("Não há textos suficientes para gerar a WordCloud.")
 
+# Tabela final
 st.subheader("Amostra dos dados filtrados")
 
 colunas_tabela = [
     c for c in [
-        "DATA", "ESTADO", "STATUS", "CATEGORIA_AJUSTADA",
-        "TAMANHO_TEXTO", "DESCRICAO"
+        "URL",
+        "DATA",
+        "ANO",
+        "MES",
+        "DIA",
+        "ESTADO",
+        "STATUS",
+        "CATEGORIA_AJUSTADA",
+        "TAMANHO_TEXTO",
+        "DESCRICAO"
     ] if c in df_filtrado.columns
 ]
 
