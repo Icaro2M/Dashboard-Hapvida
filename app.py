@@ -17,7 +17,6 @@ st.set_page_config(
 CSV_PATH = "dados/RECLAMEAQUI_HAPVIDA.csv"
 SHP_PATH = "assets/mapa_brasil/BR_UF_2024.shp"
 
-
 @st.cache_data
 def carregar_dados():
     if not os.path.exists(CSV_PATH):
@@ -71,7 +70,7 @@ def carregar_dados():
     estados_invalidos = {"--", "- - --", "NAN", "NONE", "", "NÃO INFORMADO", "NAO INFORMADO"}
     df = df[~df["ESTADO"].isin(estados_invalidos)].copy()
 
-    # Datas
+    # Tratamento de Datas
     if all(col in df.columns for col in ["ANO", "MES", "DIA"]):
         df["ANO"] = pd.to_numeric(df["ANO"], errors="coerce")
         df["MES"] = pd.to_numeric(df["MES"], errors="coerce")
@@ -86,142 +85,51 @@ def carregar_dados():
 
     if df["DATA"].notna().any():
         df["ANO_MES"] = df["DATA"].dt.to_period("M").astype(str)
-
-        iso = df["DATA"].dt.isocalendar()
-        ano_iso = iso["year"].astype("Int64")
-        semana_iso = iso["week"].astype("Int64")
-        df["ANO_SEMANA"] = (
-            ano_iso.astype(str).str.zfill(4)
-            + "-W"
-            + semana_iso.astype(str).str.zfill(2)
-        )
-        df.loc[df["DATA"].isna(), "ANO_SEMANA"] = None
-
-        df["DATA_SEMANA"] = df["DATA"] - pd.to_timedelta(df["DATA"].dt.weekday, unit="D")
+        # Extração para lógica semanal
+        df["NUM_SEMANA"] = df["DATA"].dt.isocalendar().week.astype(int)
+        df["ANO_EXTRAIDO"] = df["DATA"].dt.year.astype(int)
     else:
         df["ANO_MES"] = None
-        df["ANO_SEMANA"] = None
-        df["DATA_SEMANA"] = pd.NaT
+        df["NUM_SEMANA"] = None
+        df["ANO_EXTRAIDO"] = None
 
     bins = [0, 200, 500, 1000, 2000, 999999]
-    labels = [
-        "Muito curto (0-200)",
-        "Curto (201-500)",
-        "Médio (501-1000)",
-        "Longo (1001-2000)",
-        "Muito longo (2000+)"
-    ]
-    df["FAIXA_TEXTO"] = pd.cut(
-        df["TAMANHO_TEXTO"],
-        bins=bins,
-        labels=labels,
-        include_lowest=True
-    )
+    labels = ["Muito curto (0-200)", "Curto (201-500)", "Médio (501-1000)", "Longo (1001-2000)", "Muito longo (2000+)"]
+    df["FAIXA_TEXTO"] = pd.cut(df["TAMANHO_TEXTO"], bins=bins, labels=labels, include_lowest=True)
 
     return df
-
 
 @st.cache_data
 def carregar_mapa_ibge():
     if not os.path.exists(SHP_PATH):
         raise FileNotFoundError(f"Shapefile não encontrado: {SHP_PATH}")
-
     gdf = gpd.read_file(SHP_PATH)
-    gdf = gdf.set_geometry(gdf.geometry.name)
-
-    # Renomeia colunas sem quebrar a geometria
     col_geom = gdf.geometry.name
     rename_map = {c: c.upper() for c in gdf.columns if c != col_geom}
     gdf = gdf.rename(columns=rename_map)
-
     if "SIGLA_UF" in gdf.columns:
         gdf["ESTADO"] = gdf["SIGLA_UF"].astype(str).str.upper()
-    elif "SIGLA" in gdf.columns:
-        gdf["ESTADO"] = gdf["SIGLA"].astype(str).str.upper()
-    elif "NM_UF" in gdf.columns:
-        nome_para_sigla = {
-            "ACRE": "AC", "ALAGOAS": "AL", "AMAPÁ": "AP", "AMAPA": "AP",
-            "AMAZONAS": "AM", "BAHIA": "BA", "CEARÁ": "CE", "CEARA": "CE",
-            "DISTRITO FEDERAL": "DF", "ESPÍRITO SANTO": "ES", "ESPIRITO SANTO": "ES",
-            "GOIÁS": "GO", "GOIAS": "GO", "MARANHÃO": "MA", "MARANHAO": "MA",
-            "MATO GROSSO": "MT", "MATO GROSSO DO SUL": "MS", "MINAS GERAIS": "MG",
-            "PARÁ": "PA", "PARA": "PA", "PARAÍBA": "PB", "PARAIBA": "PB",
-            "PARANÁ": "PR", "PARANA": "PR", "PERNAMBUCO": "PE", "PIAUÍ": "PI",
-            "PIAUI": "PI", "RIO DE JANEIRO": "RJ", "RIO GRANDE DO NORTE": "RN",
-            "RIO GRANDE DO SUL": "RS", "RONDÔNIA": "RO", "RONDONIA": "RO",
-            "RORAIMA": "RR", "SANTA CATARINA": "SC", "SÃO PAULO": "SP",
-            "SAO PAULO": "SP", "SERGIPE": "SE", "TOCANTINS": "TO"
-        }
-        gdf["ESTADO"] = gdf["NM_UF"].astype(str).str.upper().map(nome_para_sigla)
-    else:
-        raise ValueError(f"Não encontrei coluna de UF no shapefile. Colunas: {gdf.columns.tolist()}")
-
     return gdf
-
 
 def aplicar_filtros(df):
     st.sidebar.header("Filtros globais")
-
-    anos = sorted([int(a) for a in df["ANO"].dropna().unique().tolist()]) if "ANO" in df.columns else []
+    anos = sorted([int(a) for a in df["ANO"].dropna().unique().tolist()])
     estados = sorted(df["ESTADO"].dropna().unique().tolist())
     status_list = sorted(df["STATUS"].dropna().unique().tolist())
-    categorias = sorted(df["CATEGORIA_AJUSTADA"].dropna().unique().tolist())
-    faixas = sorted([str(f) for f in df["FAIXA_TEXTO"].dropna().unique().tolist()])
-
+    
     anos_sel = st.sidebar.multiselect("Ano", anos, default=anos)
     estados_sel = st.sidebar.multiselect("Estado", estados, default=estados)
     status_sel = st.sidebar.multiselect("Status", status_list, default=status_list)
-    categorias_sel = st.sidebar.multiselect("Categoria ajustada", categorias, default=categorias)
-    faixas_sel = st.sidebar.multiselect("Faixa do tamanho do texto", faixas, default=faixas)
 
     df_filtrado = df.copy()
-
     if anos_sel:
         df_filtrado = df_filtrado[df_filtrado["ANO"].isin(anos_sel)]
     if estados_sel:
         df_filtrado = df_filtrado[df_filtrado["ESTADO"].isin(estados_sel)]
     if status_sel:
         df_filtrado = df_filtrado[df_filtrado["STATUS"].isin(status_sel)]
-    if categorias_sel:
-        df_filtrado = df_filtrado[df_filtrado["CATEGORIA_AJUSTADA"].isin(categorias_sel)]
-    if faixas_sel:
-        df_filtrado = df_filtrado[df_filtrado["FAIXA_TEXTO"].astype(str).isin(faixas_sel)]
 
     return df_filtrado
-
-
-def filtrar_iqr(df, coluna="TAMANHO_TEXTO"):
-    q1 = df[coluna].quantile(0.25)
-    q3 = df[coluna].quantile(0.75)
-    iqr = q3 - q1
-    return df[(df[coluna] >= q1 - 1.5 * iqr) & (df[coluna] <= q3 + 1.5 * iqr)]
-
-stopwords_pt = {
-    "de", "a", "o", "que", "e", "do", "da", "em", "um", "para", "é", "com",
-    "não", "uma", "os", "no", "se", "na", "por", "mais", "as", "dos", "como",
-    "mas", "foi", "ao", "ele", "das", "tem", "à", "seu", "sua", "ou", "ser",
-    "quando", "muito", "há", "nos", "já", "está", "eu", "também", "só", "pelo",
-    "pela", "até", "isso", "ela", "entre", "era", "depois", "sem", "mesmo",
-    "aos", "ter", "seus", "quem", "nas", "me", "esse", "eles", "estão", "você",
-    "tinha", "foram", "essa", "num", "nem", "suas", "meu", "às", "minha",
-    "têm", "numa", "pelos", "elas", "havia", "seja", "qual", "será", "nós",
-    "tenho", "lhe", "deles", "essas", "esses", "pelas", "este", "fosse",
-    "dele", "tu", "te", "vocês", "vos", "lhes", "meus", "minhas", "teu",
-    "tua", "teus", "tuas", "nosso", "nossa", "nossos", "nossas", "dela",
-    "delas", "esta", "estes", "estas", "aquele", "aquela", "aqueles",
-    "aquelas", "isto", "aquilo", "estou", "está", "estamos", "estão",
-    "estive", "esteve", "estivemos", "estiveram", "estava", "estávamos",
-    "estavam", "estivera", "estivéramos", "esteja", "estejamos", "estejam",
-    "estivesse", "estivéssemos", "estivessem", "estiver", "estivermos",
-    "estiverem", "hei", "há", "havemos", "hão", "houve", "houvemos",
-    "houveram", "houvera", "houvéramos", "haja", "hajamos", "hajam",
-    "houvesse", "houvéssemos", "houvessem", "houver", "houvermos",
-    "houverem", "houverei", "houverá", "houveremos", "houverão",
-    "houveria", "houveríamos", "houveriam", "sou", "somos", "são", "era",
-    "éramos", "eram", "fui", "fomos", "foram", "fora", "fôramos",
-    "ainda", "dia", "dias", "pois", "onde", "todo", "toda", "todos", "todas",
-    "nao", "porque", "sobre", "pode", "fazer", "vez", "bem", "aqui",
-}
 
 def gerar_wordcloud(texto):
     def sem_acentos(palavra):
@@ -230,13 +138,17 @@ def gerar_wordcloud(texto):
             if not unicodedata.combining(c)
         )
 
+    # Bloco de Stopwords fornecido exatamente como solicitado
     stopwords_pt = {
         "de", "da", "do", "das", "dos", "e", "em", "a", "o", "as", "os",
         "para", "por", "com", "sem", "um", "uma", "que", "não", "na", "no",
         "nas", "nos", "ao", "aos", "às", "como", "mais", "menos", "já",
         "foi", "ser", "tem", "tinha", "meu", "minha", "seu", "sua", "pra",
         "porque", "quando", "onde", "sobre", "muito", "muita", "muitas",
-        "muitos", "ainda", "após", "depois", "antes"
+        "muitos", "ainda", "após", "depois", "antes", "é", "sendo", "só", 
+        "também", "tb", "q", "pq", "onde", "ainda", "após", "antes", "sendo",
+        "vc", "você", "voces", "voce", "voces","então", "entao", "assim", "assim como", 
+        "além disso", "além de", "além",
     }
 
     stopwords_pt_base = {
@@ -265,7 +177,14 @@ def gerar_wordcloud(texto):
         "cá", "cada", "algum", "alguma", "alguns", "algumas", "outro", "outra",
         "outros", "outras", "pouco", "pouca", "poucos", "poucas", "mesma", "mesmas",
         "mesmos", "só", "tambem", "nao", "voce", "voces", "tb", "q", "pq", "onde",
-        "ainda", "após", "antes", "sendo"
+        "ainda", "após", "antes", "sendo", "muitos", "ainda", 
+        "após", "depois", "antes", "é", "sendo", "só", 
+        "também", "tb", "q", "pq", "onde", "ainda", "após", "antes", "sendo",
+        "vc", "você", "voces", "voce", "voces","então", "entao", "assim", "assim como", 
+        "além disso", "além de", "além", "fiz", "fazer", "vai", "vão", "vou", "vamos", "vão", 
+        "fizemos", "fizeram", "fizer", "fizerem", "vez", "ir", "será", "serão", "seremos", "seria", 
+        "seriam", "estará", "estarão", "estaremos", "quase", "quais", "qualquer", "quanta", 
+        "quantas", "quanto", "quantos", "sabe", "sabem", "sou"
     }
 
     stopwords_pt |= stopwords_pt_base
@@ -283,269 +202,89 @@ def gerar_wordcloud(texto):
     ax.axis("off")
     return fig
 
+# --- LÓGICA DO DASHBOARD ---
 
 try:
     df = carregar_dados()
     gdf_mapa = carregar_mapa_ibge()
 except Exception as e:
-    st.error(f"Erro ao carregar os dados: {e}")
+    st.error(f"Erro ao carregar dados: {e}")
     st.stop()
 
 df_filtrado = aplicar_filtros(df)
 
 st.title("Dashboard - Reclame Aqui Hapvida")
-st.markdown("Análise exploratória das reclamações com filtros globais e visualizações interativas.")
 
-if df_filtrado.empty:
-    st.warning("Os filtros selecionados não retornaram registros.")
-    st.stop()
-
-total_reclamacoes = int(df_filtrado["CASOS"].sum())
-total_estados = df_filtrado["ESTADO"].nunique()
-status_mais_comum = df_filtrado["STATUS"].mode()[0] if not df_filtrado.empty else "-"
-media_tamanho = round(df_filtrado["TAMANHO_TEXTO"].mean(), 1)
-
+# Métricas Principais
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total de reclamações", total_reclamacoes)
-c2.metric("Estados com ocorrência", total_estados)
-c3.metric("Status mais comum", status_mais_comum)
-c4.metric("Média de caracteres", media_tamanho)
+c1.metric("Total de reclamações", int(df_filtrado["CASOS"].sum()))
+c2.metric("Estados com ocorrência", df_filtrado["ESTADO"].nunique())
+c3.metric("Status mais comum", df_filtrado["STATUS"].mode()[0] if not df_filtrado.empty else "-")
+c4.metric("Média de caracteres", round(df_filtrado["TAMANHO_TEXTO"].mean(), 1))
 
-st.subheader("Evolução temporal das reclamações")
-
-if df_filtrado["DATA"].notna().any():
-    serie = (
-        df_filtrado.dropna(subset=["DATA"])
-        .groupby("DATA", as_index=False)["CASOS"]
-        .sum()
-        .sort_values("DATA")
-    )
-    serie["MEDIA_MOVEL_3"] = serie["CASOS"].rolling(3, min_periods=1).mean()
-
-    fig_tempo = go.Figure()
-    fig_tempo.add_trace(go.Scatter(
-        x=serie["DATA"],
-        y=serie["CASOS"],
-        mode="lines+markers",
-        name="Casos"
-    ))
-    fig_tempo.add_trace(go.Scatter(
-        x=serie["DATA"],
-        y=serie["MEDIA_MOVEL_3"],
-        mode="lines",
-        name="Média móvel (3)"
-    ))
-    fig_tempo.update_layout(
-        height=420,
-        xaxis_title="Data",
-        yaxis_title="Quantidade"
-    )
-    st.plotly_chart(fig_tempo, width="stretch")
-else:
-    st.info("Não há datas válidas para gerar a série temporal.")
-
+# Gráficos de Mapa e Ranking
 col1, col2 = st.columns(2)
-
 with col1:
-    st.subheader("Mapa de reclamações por estado")
-
-    mapa_df = (
-        df_filtrado.groupby("ESTADO", as_index=False)["CASOS"]
-        .sum()
-    )
-
-    gdf_plot = gdf_mapa.merge(mapa_df, on="ESTADO", how="left")
-    gdf_plot["CASOS"] = gdf_plot["CASOS"].fillna(0)
-
-    fig_mapa = px.choropleth(
-        gdf_plot,
-        geojson=gdf_plot.geometry.__geo_interface__,
-        locations=gdf_plot.index,
-        color="CASOS",
-        hover_name="ESTADO",
-        projection="mercator",
-        color_continuous_scale="Reds"
-    )
+    st.subheader("Mapa de Reclamações")
+    mapa_df = df_filtrado.groupby("ESTADO", as_index=False)["CASOS"].sum()
+    gdf_plot = gdf_mapa.merge(mapa_df, on="ESTADO", how="left").fillna(0)
+    fig_mapa = px.choropleth(gdf_plot, geojson=gdf_plot.geometry.__geo_interface__, locations=gdf_plot.index, color="CASOS", hover_name="ESTADO", color_continuous_scale="Reds")
     fig_mapa.update_geos(fitbounds="locations", visible=False)
-    fig_mapa.update_layout(height=500, margin=dict(l=0, r=0, t=0, b=0))
-    st.plotly_chart(fig_mapa, width="stretch")
+    st.plotly_chart(fig_mapa, use_container_width=True)
 
 with col2:
-    st.subheader("Ranking de reclamações por estado")
+    st.subheader("Ranking por Estado")
+    ranking = df_filtrado.groupby("ESTADO", as_index=False)["CASOS"].sum().sort_values("CASOS", ascending=False)
+    st.plotly_chart(px.bar(ranking, x="ESTADO", y="CASOS", text_auto=True), use_container_width=True)
 
-    ranking_estados = (
-        df_filtrado.groupby("ESTADO", as_index=False)["CASOS"]
-        .sum()
-        .sort_values("CASOS", ascending=False)
-    )
+# --- EVOLUÇÃO SEMANAL (ANO E SEMANAS COMPLETAS) ---
+st.divider()
+st.subheader("📊 Evolução Semanal por Status")
 
-    fig_estados = px.bar(
-        ranking_estados,
-        x="ESTADO",
-        y="CASOS",
-        text_auto=True
-    )
-    fig_estados.update_layout(
-        height=500,
-        xaxis_title="Estado",
-        yaxis_title="Casos"
-    )
-    st.plotly_chart(fig_estados, width="stretch")
+if df_filtrado["DATA"].notna().any():
+    anos_disponiveis = sorted(df_filtrado["ANO_EXTRAIDO"].unique())
+    ano_selecionado = st.selectbox("Selecione o ano para detalhamento semanal", anos_disponiveis, index=len(anos_disponiveis)-1)
+    
+    df_ano = df_filtrado[df_filtrado["ANO_EXTRAIDO"] == ano_selecionado]
+    
+    semanal_status = df_ano.groupby(["NUM_SEMANA", "STATUS"], as_index=False)["CASOS"].sum()
 
-col3, col4 = st.columns(2)
-
-with col3:
-    st.subheader("Distribuição por status")
-
-    status_df = (
-        df_filtrado.groupby("STATUS", as_index=False)["CASOS"]
-        .sum()
-        .sort_values("CASOS", ascending=False)
-    )
-
-    fig_status = px.pie(
-        status_df,
-        names="STATUS",
-        values="CASOS",
-        hole=0.4
-    )
-    fig_status.update_layout(height=450)
-    st.plotly_chart(fig_status, width="stretch")
-
-with col4:
-    st.subheader("Categorias ajustadas mais frequentes")
-
-    cat_df = (
-        df_filtrado.groupby("CATEGORIA_AJUSTADA", as_index=False)["CASOS"]
-        .sum()
-        .sort_values("CASOS", ascending=False)
-        .head(10)
-    )
-
-    fig_cat = px.bar(
-        cat_df,
-        x="CASOS",
-        y="CATEGORIA_AJUSTADA",
-        orientation="h",
-        text_auto=True
-    )
-    fig_cat.update_layout(
-        height=450,
-        xaxis_title="Casos",
-        yaxis_title="Categoria"
-    )
-    fig_cat.update_yaxes(categoryorder="total ascending")
-    st.plotly_chart(fig_cat, width="stretch")
-
-col5, col6 = st.columns(2)
-
-with col5:
-    st.subheader("Análise de Densidade: Tamanho do Texto por Status")
-
-    df_iqr = filtrar_iqr(df_filtrado)
-
-    fig_violin = px.violin(
-        df_iqr,
-        x="STATUS",
-        y="TAMANHO_TEXTO",
-        color="STATUS",
-        color_discrete_sequence=px.colors.sequential.Viridis,
-        box=True,
-    )
-    fig_violin.update_layout(
-        height=500,
-        xaxis_title="Status da Reclamação",
-        yaxis_title="Quantidade de Caracteres",
-        showlegend=False,
-    )
-    fig_violin.update_xaxes(tickangle=45)
-    st.plotly_chart(fig_violin, width="stretch")
-
-with col6:
-    st.subheader("Distribuição do tamanho das reclamações")
-
-    fig_hist = px.histogram(
-        df_filtrado,
-        x="TAMANHO_TEXTO",
-        color="STATUS",
-        nbins=30,
-        marginal="box"
-    )
-    fig_hist.update_layout(
-        height=450,
-        xaxis_title="Quantidade de caracteres",
-        yaxis_title="Frequência"
-    )
-    st.plotly_chart(fig_hist, width="stretch")
-
-# Evolução semanal por status
-st.subheader("Evolução semanal por status")
-st.subheader("Evolução mensal por status")
-
-if df_filtrado["DATA_SEMANA"].notna().any():
-    semanal_status = (
-        df_filtrado.dropna(subset=["DATA_SEMANA"])
-        .groupby(["DATA_SEMANA", "STATUS"], as_index=False)["CASOS"]
-        .sum()
-    )
-
-    if not semanal_status.empty:
-        semanas = pd.date_range(
-            start=semanal_status["DATA_SEMANA"].min(),
-            end=semanal_status["DATA_SEMANA"].max(),
-            freq="W-MON"
-        )
-        status_ordem = sorted(semanal_status["STATUS"].unique().tolist())
-        idx = pd.MultiIndex.from_product(
-            [semanas, status_ordem],
-            names=["DATA_SEMANA", "STATUS"]
-        )
-        semanal_status = (
-            semanal_status.set_index(["DATA_SEMANA", "STATUS"])
-            .reindex(idx, fill_value=0)
-            .reset_index()
-            .sort_values("DATA_SEMANA")
-        )
+    # Garantir que todas as semanas do ano apareçam no gráfico (1 a 52)
+    todas_semanas = list(range(1, 53))
+    todos_status = df_filtrado["STATUS"].unique()
+    grid = pd.MultiIndex.from_product([todas_semanas, todos_status], names=["NUM_SEMANA", "STATUS"]).to_frame(index=False)
+    df_plot_semanal = pd.merge(grid, semanal_status, on=["NUM_SEMANA", "STATUS"], how="left").fillna(0)
 
     fig_semanal = px.line(
-        semanal_status,
-        x="DATA_SEMANA",
+        df_plot_semanal,
+        x="NUM_SEMANA",
         y="CASOS",
         color="STATUS",
-        markers=True
+        markers=True,
+        labels={"NUM_SEMANA": "Semana do Ano", "CASOS": "Total de Casos"}
     )
+
     fig_semanal.update_layout(
-        height=420,
-        xaxis_title="Semana (início)",
-        yaxis_title="Casos"
+        xaxis=dict(
+            tickmode='linear',
+            tick0=1,
+            dtick=1,
+            range=[0.5, 52.5],
+            title_standoff=15
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=500
     )
-    fig_semanal.update_xaxes(tickformat="%Y-W%V")
-    st.plotly_chart(fig_semanal, width="stretch")
-else:
-    st.info("Não há datas válidas para gerar a evolução semanal.")
+    st.plotly_chart(fig_semanal, use_container_width=True)
 
-st.subheader("WordCloud das descrições")
-
+# WordCloud e Tabela
+st.divider()
+st.subheader("Nuvem de Palavras (Descrições)")
 texto_total = " ".join(df_filtrado["DESCRICAO"].dropna().astype(str).tolist()).strip()
-
 if texto_total:
-    fig_wc = gerar_wordcloud(texto_total)
-    st.pyplot(fig_wc)
+    st.pyplot(gerar_wordcloud(texto_total))
 else:
-    st.info("Não há textos suficientes para gerar a WordCloud.")
+    st.info("Texto insuficiente para gerar nuvem.")
 
-st.subheader("Amostra dos dados filtrados")
-
-colunas_tabela = [
-    c for c in [
-        "DATA", "ESTADO", "STATUS", "CATEGORIA_AJUSTADA",
-        "TAMANHO_TEXTO", "DESCRICAO"
-    ] if c in df_filtrado.columns
-]
-
-df_tabela = df_filtrado[colunas_tabela].copy()
-
-if "DATA" in df_tabela.columns:
-    df_tabela = df_tabela.sort_values("DATA", ascending=False)
-
-st.dataframe(df_tabela.head(50), width="stretch")
+st.subheader("Amostra de Dados Filtrados")
+st.dataframe(df_filtrado[["DATA", "ESTADO", "STATUS", "DESCRICAO"]].head(50), use_container_width=True)
