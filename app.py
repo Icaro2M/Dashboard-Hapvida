@@ -5,6 +5,7 @@ import geopandas as gpd
 import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
+import unicodedata
 from wordcloud import WordCloud, STOPWORDS
 
 st.set_page_config(
@@ -85,8 +86,22 @@ def carregar_dados():
 
     if df["DATA"].notna().any():
         df["ANO_MES"] = df["DATA"].dt.to_period("M").astype(str)
+
+        iso = df["DATA"].dt.isocalendar()
+        ano_iso = iso["year"].astype("Int64")
+        semana_iso = iso["week"].astype("Int64")
+        df["ANO_SEMANA"] = (
+            ano_iso.astype(str).str.zfill(4)
+            + "-W"
+            + semana_iso.astype(str).str.zfill(2)
+        )
+        df.loc[df["DATA"].isna(), "ANO_SEMANA"] = None
+
+        df["DATA_SEMANA"] = df["DATA"] - pd.to_timedelta(df["DATA"].dt.weekday, unit="D")
     else:
         df["ANO_MES"] = None
+        df["ANO_SEMANA"] = None
+        df["DATA_SEMANA"] = pd.NaT
 
     bins = [0, 200, 500, 1000, 2000, 999999]
     labels = [
@@ -209,6 +224,53 @@ stopwords_pt = {
 }
 
 def gerar_wordcloud(texto):
+    def sem_acentos(palavra):
+        return "".join(
+            c for c in unicodedata.normalize("NFKD", palavra)
+            if not unicodedata.combining(c)
+        )
+
+    stopwords_pt = {
+        "de", "da", "do", "das", "dos", "e", "em", "a", "o", "as", "os",
+        "para", "por", "com", "sem", "um", "uma", "que", "não", "na", "no",
+        "nas", "nos", "ao", "aos", "às", "como", "mais", "menos", "já",
+        "foi", "ser", "tem", "tinha", "meu", "minha", "seu", "sua", "pra",
+        "porque", "quando", "onde", "sobre", "muito", "muita", "muitas",
+        "muitos", "ainda", "após", "depois", "antes"
+    }
+
+    stopwords_pt_base = {
+        "a", "à", "ao", "aos", "aquela", "aquelas", "aquele", "aqueles", "aquilo",
+        "as", "até", "com", "como", "da", "das", "de", "dela", "delas", "dele", "deles",
+        "depois", "do", "dos", "e", "ela", "elas", "ele", "eles", "em", "entre",
+        "era", "eram", "essa", "essas", "esse", "esses", "esta", "está", "estão",
+        "estamos", "estar", "estas", "estava", "estavam", "este", "esteja", "estejam",
+        "estejamos", "estes", "esteve", "estive", "estivemos", "estiveram", "estiver",
+        "estivera", "estiverem", "estivermos", "estivesse", "estivessem", "estou",
+        "eu", "foi", "fomos", "for", "fora", "foram", "forem", "formos", "fosse",
+        "fossem", "fui", "há", "haja", "hajam", "hajamos", "haver", "hei", "houve",
+        "houvemos", "houveram", "houver", "houvera", "houverei", "houverem",
+        "houveremos", "houveria", "houveriam", "houvermos", "houvesse", "houvessem",
+        "isso", "isto", "já", "lhe", "lhes", "mais", "mas", "me", "mesmo", "meu",
+        "meus", "minha", "minhas", "muito", "muitos", "muita", "muitas", "na", "não",
+        "nas", "nem", "no", "nos", "nossa", "nossas", "nosso", "nossos", "num", "numa",
+        "o", "os", "ou", "para", "pela", "pelas", "pelo", "pelos", "por", "qual",
+        "quando", "que", "quem", "se", "sem", "ser", "seu", "seus", "sua", "suas",
+        "também", "te", "tem", "tendo", "tenho", "ter", "tinha", "tinham", "tive",
+        "tivemos", "tiveram", "todo", "todos", "toda", "todas", "tua", "tuas", "um",
+        "uma", "você", "vocês", "vos", "nós", "às", "sobre", "porque", "pra", "pro",
+        "pros", "pras", "nesse", "nessa", "nesses", "nessas", "neste", "nesta",
+        "nestes", "nestas", "daqui", "dali", "daquele", "daqueles", "daquela",
+        "daquelas", "dessa", "desse", "dessas", "desses", "aí", "aqui", "ali", "lá",
+        "cá", "cada", "algum", "alguma", "alguns", "algumas", "outro", "outra",
+        "outros", "outras", "pouco", "pouca", "poucos", "poucas", "mesma", "mesmas",
+        "mesmos", "só", "tambem", "nao", "voce", "voces", "tb", "q", "pq", "onde",
+        "ainda", "após", "antes", "sendo"
+    }
+
+    stopwords_pt |= stopwords_pt_base
+    stopwords_pt |= {sem_acentos(p) for p in stopwords_pt_base}
+
     wc = WordCloud(
         width=1200,
         height=500,
@@ -416,30 +478,51 @@ with col6:
     )
     st.plotly_chart(fig_hist, width="stretch")
 
+# Evolução semanal por status
+st.subheader("Evolução semanal por status")
 st.subheader("Evolução mensal por status")
 
-if df_filtrado["ANO_MES"].notna().any():
-    mensal_status = (
-        df_filtrado.groupby(["ANO_MES", "STATUS"], as_index=False)["CASOS"]
+if df_filtrado["DATA_SEMANA"].notna().any():
+    semanal_status = (
+        df_filtrado.dropna(subset=["DATA_SEMANA"])
+        .groupby(["DATA_SEMANA", "STATUS"], as_index=False)["CASOS"]
         .sum()
-        .sort_values("ANO_MES")
     )
 
-    fig_mensal = px.line(
-        mensal_status,
-        x="ANO_MES",
+    if not semanal_status.empty:
+        semanas = pd.date_range(
+            start=semanal_status["DATA_SEMANA"].min(),
+            end=semanal_status["DATA_SEMANA"].max(),
+            freq="W-MON"
+        )
+        status_ordem = sorted(semanal_status["STATUS"].unique().tolist())
+        idx = pd.MultiIndex.from_product(
+            [semanas, status_ordem],
+            names=["DATA_SEMANA", "STATUS"]
+        )
+        semanal_status = (
+            semanal_status.set_index(["DATA_SEMANA", "STATUS"])
+            .reindex(idx, fill_value=0)
+            .reset_index()
+            .sort_values("DATA_SEMANA")
+        )
+
+    fig_semanal = px.line(
+        semanal_status,
+        x="DATA_SEMANA",
         y="CASOS",
         color="STATUS",
         markers=True
     )
-    fig_mensal.update_layout(
+    fig_semanal.update_layout(
         height=420,
-        xaxis_title="Ano-Mês",
+        xaxis_title="Semana (início)",
         yaxis_title="Casos"
     )
-    st.plotly_chart(fig_mensal, width="stretch")
+    fig_semanal.update_xaxes(tickformat="%Y-W%V")
+    st.plotly_chart(fig_semanal, width="stretch")
 else:
-    st.info("Não há datas válidas para gerar a evolução mensal.")
+    st.info("Não há datas válidas para gerar a evolução semanal.")
 
 st.subheader("WordCloud das descrições")
 
