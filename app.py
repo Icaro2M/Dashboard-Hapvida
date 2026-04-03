@@ -235,6 +235,14 @@ def aplicar_filtros(df):
     status_sel = st.sidebar.multiselect("Status", status_list, default=status_list)
     faixas_sel = st.sidebar.multiselect("Faixa do tamanho do texto", faixas, default=faixas)
     categorias_sel = st.sidebar.multiselect("Categoria", categorias_disponiveis, default=[])
+    
+    st.sidebar.markdown("---")
+    # Adicionado checkbox focado em remover apenas os erros de dados gigantes
+    remover_erro_texto = st.sidebar.checkbox(
+        "Remover Anomalia (Texto Gigante)", 
+        value=True, 
+        help="Remove o erro na base onde um texto atinge milhões de caracteres."
+    )
 
     df_filtrado = df.copy()
 
@@ -250,12 +258,16 @@ def aplicar_filtros(df):
         mascara_categoria = df_filtrado[categorias_sel].sum(axis=1) > 0
         df_filtrado = df_filtrado[mascara_categoria]
 
+    # Lógica simples para remover o outlier de ~4 milhões usando um teto seguro
+    if remover_erro_texto and not df_filtrado.empty:
+        df_filtrado = df_filtrado[df_filtrado["TAMANHO_TEXTO"] <= 15000]
+
     return df_filtrado
 
 
 def gerar_wordcloud(texto):
     stopwords_pt = {
-        "de", "da", "do", "das", "dos", "e", "em", "a", "o", "as", "os",
+        "de", "da", "do", "das", "dos", "e", "é", "em", "a", "o", "as", "os",
         "para", "por", "com", "sem", "um", "uma", "que", "não", "na", "no",
         "nas", "nos", "ao", "aos", "às", "como", "mais", "menos", "já",
         "foi", "ser", "tem", "tinha", "meu", "minha", "seu", "sua", "pra",
