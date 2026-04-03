@@ -21,6 +21,22 @@ MESES_ORDEM = [
     "Jul", "Ago", "Set", "Out", "Nov", "Dez",
 ]
 
+CATEGORY_COLUMNS = [
+    "ADMINISTRATIVO",
+    "ATRASO NA ENTREGA",
+    "CLÍNICAS MÉDICAS",
+    "COBRANÇA INDEVIDA",
+    "DEMORA PARA AUTORIZAÇÃO DE CONSULTAS, EXAMES E CIRURGIAS",
+    "DIFICULDADE PARA AGENDAMENTO DE EXAMES-CONSULTAS",
+    "EXAMES LAB E IMAGENS",
+    "MAU ATENDIMENTO",
+    "PROBLEMAS DE INFRAESTRUTURA",
+    "QUALIDADE DO SERVIÇO",
+    "QUALIDADE DO SERVIÇO PRESTADO",
+    "REDE DE ATENDIMENTO",
+    "REEMBOLSO DE PAGAMENTO",
+]
+
 
 @st.cache_data
 def carregar_dados():
@@ -126,6 +142,10 @@ def carregar_dados():
         include_lowest=True
     )
 
+    for col in CATEGORY_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
     return df
 
 
@@ -173,13 +193,13 @@ def aplicar_filtros(df):
     anos = sorted([int(a) for a in df["ANO"].dropna().unique().tolist()]) if "ANO" in df.columns else []
     estados = sorted(df["ESTADO"].dropna().unique().tolist())
     status_list = sorted(df["STATUS"].dropna().unique().tolist())
-    categorias = sorted(df["CATEGORIA_AJUSTADA"].dropna().unique().tolist())
     faixas = sorted([str(f) for f in df["FAIXA_TEXTO"].dropna().unique().tolist()])
+    categorias_disponiveis = [col for col in CATEGORY_COLUMNS if col in df.columns]
 
     anos_sel = st.sidebar.multiselect("Ano", anos, default=anos)
     estados_sel = st.sidebar.multiselect("Estado", estados, default=estados)
     status_sel = st.sidebar.multiselect("Status", status_list, default=status_list)
-    categorias_sel = st.sidebar.multiselect("Categoria ajustada", categorias, default=categorias)
+    categorias_sel = st.sidebar.multiselect("Categoria", categorias_disponiveis, default=[])
     faixas_sel = st.sidebar.multiselect("Faixa do tamanho do texto", faixas, default=faixas)
 
     df_filtrado = df.copy()
@@ -191,7 +211,8 @@ def aplicar_filtros(df):
     if status_sel:
         df_filtrado = df_filtrado[df_filtrado["STATUS"].isin(status_sel)]
     if categorias_sel:
-        df_filtrado = df_filtrado[df_filtrado["CATEGORIA_AJUSTADA"].isin(categorias_sel)]
+        mascara_categoria = df_filtrado[categorias_sel].sum(axis=1) > 0
+        df_filtrado = df_filtrado[mascara_categoria]
     if faixas_sel:
         df_filtrado = df_filtrado[df_filtrado["FAIXA_TEXTO"].astype(str).isin(faixas_sel)]
 
@@ -424,19 +445,40 @@ with col3:
     st.plotly_chart(fig_status, width="stretch")
 
 with col4:
-    st.subheader("Categorias ajustadas mais frequentes")
+    st.subheader("Categorias mais frequentes")
+
+    categorias_validas = [col for col in CATEGORY_COLUMNS if col in df_filtrado.columns]
 
     cat_df = (
-        df_filtrado.groupby("CATEGORIA_AJUSTADA", as_index=False)["CASOS"]
+        df_filtrado[categorias_validas]
         .sum()
-        .sort_values("CASOS", ascending=False)
+        .sort_values(ascending=False)
         .head(10)
+        .reset_index()
     )
+    cat_df.columns = ["CATEGORIA", "CASOS"]
+
+    rotulo_categoria = {
+        "ADMINISTRATIVO": "Administrativo",
+        "ATRASO NA ENTREGA": "Atraso na entrega",
+        "CLÍNICAS MÉDICAS": "Clínicas médicas",
+        "COBRANÇA INDEVIDA": "Cobrança indevida",
+        "DEMORA PARA AUTORIZAÇÃO DE CONSULTAS, EXAMES E CIRURGIAS": "Demora para autorização de consultas, exames e cirurgias",
+        "DIFICULDADE PARA AGENDAMENTO DE EXAMES-CONSULTAS": "Dificuldade para agendamento de exames-consultas",
+        "EXAMES LAB E IMAGENS": "Exames lab e imagens",
+        "MAU ATENDIMENTO": "Mau atendimento",
+        "PROBLEMAS DE INFRAESTRUTURA": "Problemas de infraestrutura",
+        "QUALIDADE DO SERVIÇO": "Qualidade do serviço",
+        "QUALIDADE DO SERVIÇO PRESTADO": "Qualidade do serviço prestado",
+        "REDE DE ATENDIMENTO": "Rede de atendimento",
+        "REEMBOLSO DE PAGAMENTO": "Reembolso de pagamento",
+    }
+    cat_df["CATEGORIA"] = cat_df["CATEGORIA"].map(rotulo_categoria).fillna(cat_df["CATEGORIA"])
 
     fig_cat = px.bar(
         cat_df,
         x="CASOS",
-        y="CATEGORIA_AJUSTADA",
+        y="CATEGORIA",
         orientation="h",
         text_auto=True
     )
