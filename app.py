@@ -16,6 +16,11 @@ st.set_page_config(
 CSV_PATH = "dados/RECLAMEAQUI_HAPVIDA.csv"
 SHP_PATH = "assets/mapa_brasil/BR_UF_2024.shp"
 
+MESES_ORDEM = [
+    "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+    "Jul", "Ago", "Set", "Out", "Nov", "Dez",
+]
+
 
 @st.cache_data
 def carregar_dados():
@@ -83,10 +88,28 @@ def carregar_dados():
     else:
         df["DATA"] = pd.NaT
 
+    df["ANO_SEMANA"] = pd.NA
     if df["DATA"].notna().any():
         df["ANO_MES"] = df["DATA"].dt.to_period("M").astype(str)
+        mask_data = df["DATA"].notna()
+        iso = df.loc[mask_data, "DATA"].dt.isocalendar()
+        df.loc[mask_data, "ANO_SEMANA"] = (
+            iso["year"].astype(str) + "-S" + iso["week"].astype(str).str.zfill(2)
+        )
     else:
         df["ANO_MES"] = None
+
+    # Remoção de outliers via IQR em TAMANHO_TEXTO (antes de qualquer estatística/gráfico)
+    df = df.dropna(subset=["TAMANHO_TEXTO"])
+    q1 = df["TAMANHO_TEXTO"].quantile(0.25)
+    q3 = df["TAMANHO_TEXTO"].quantile(0.75)
+    iqr = q3 - q1
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+    df = df[
+        (df["TAMANHO_TEXTO"] >= lower_bound)
+        & (df["TAMANHO_TEXTO"] <= upper_bound)
+    ].copy()
 
     bins = [0, 200, 500, 1000, 2000, 999999]
     labels = [
@@ -175,14 +198,9 @@ def aplicar_filtros(df):
     return df_filtrado
 
 
-def filtrar_iqr(df, coluna="TAMANHO_TEXTO"):
-    q1 = df[coluna].quantile(0.25)
-    q3 = df[coluna].quantile(0.75)
-    iqr = q3 - q1
-    return df[(df[coluna] >= q1 - 1.5 * iqr) & (df[coluna] <= q3 + 1.5 * iqr)]
-
 stopwords_pt = {
-    "de", "a", "o", "que", "e", "do", "da", "em", "um", "para", "é", "com",
+    "é",
+    "de", "a", "o", "que", "e", "do", "da", "em", "um", "para", "com",
     "não", "uma", "os", "no", "se", "na", "por", "mais", "as", "dos", "como",
     "mas", "foi", "ao", "ele", "das", "tem", "à", "seu", "sua", "ou", "ser",
     "quando", "muito", "há", "nos", "já", "está", "eu", "também", "só", "pelo",
@@ -209,12 +227,13 @@ stopwords_pt = {
 }
 
 def gerar_wordcloud(texto):
+    todas_stopwords = STOPWORDS.union(stopwords_pt)
     wc = WordCloud(
         width=1200,
         height=500,
         background_color="white",
-        stopwords=STOPWORDS.union(stopwords_pt)
-    ).generate(texto)
+        stopwords=todas_stopwords,
+    ).generate(texto.lower())
 
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.imshow(wc, interpolation="bilinear")
@@ -281,6 +300,60 @@ if df_filtrado["DATA"].notna().any():
     st.plotly_chart(fig_tempo, width="stretch")
 else:
     st.info("Não há datas válidas para gerar a série temporal.")
+
+st.subheader("Casos por mês do ano (Jan–Dez)")
+
+if "MES" in df_filtrado.columns and df_filtrado["MES"].notna().any():
+    df_mes = df_filtrado.copy()
+    df_mes["MES"] = pd.to_numeric(df_mes["MES"], errors="coerce")
+    df_mes = df_mes[df_mes["MES"].between(1, 12)]
+    if not df_mes.empty:
+        por_mes = df_mes.groupby("MES", as_index=False)["CASOS"].sum()
+        base_meses = pd.DataFrame({"MES": range(1, 13)})
+        por_mes = base_meses.merge(por_mes, on="MES", how="left").fillna({"CASOS": 0})
+        por_mes["MÊS"] = por_mes["MES"].astype(int).map(lambda m: MESES_ORDEM[m - 1])
+        fig_meses_ano = px.bar(
+            por_mes,
+            x="MÊS",
+            y="CASOS",
+            text_auto=True,
+            category_orders={"MÊS": MESES_ORDEM},
+        )
+        fig_meses_ano.update_layout(
+            height=420,
+            xaxis_title="Mês",
+            yaxis_title="Casos (soma no período filtrado)",
+        )
+        st.plotly_chart(fig_meses_ano, width="stretch")
+    else:
+        st.info("Não há registros com mês válido (1–12).")
+else:
+    st.info("Não há coluna Mês nos dados filtrados.")
+
+st.subheader("Distribuição de casos por semana (ISO)")
+
+if df_filtrado["ANO_SEMANA"].notna().any():
+    semana_df = (
+        df_filtrado.dropna(subset=["ANO_SEMANA"])
+        .groupby("ANO_SEMANA", as_index=False)["CASOS"]
+        .sum()
+        .sort_values("ANO_SEMANA")
+    )
+    fig_semana = px.bar(
+        semana_df,
+        x="ANO_SEMANA",
+        y="CASOS",
+        text_auto=True,
+    )
+    fig_semana.update_layout(
+        height=420,
+        xaxis_title="Ano e semana (ex.: 2022-S01 = semana 1 do ano)",
+        yaxis_title="Casos",
+    )
+    fig_semana.update_xaxes(tickangle=45)
+    st.plotly_chart(fig_semana, width="stretch")
+else:
+    st.info("Não há datas válidas para agrupar por semana.")
 
 col1, col2 = st.columns(2)
 
@@ -380,10 +453,8 @@ col5, col6 = st.columns(2)
 with col5:
     st.subheader("Análise de Densidade: Tamanho do Texto por Status")
 
-    df_iqr = filtrar_iqr(df_filtrado)
-
     fig_violin = px.violin(
-        df_iqr,
+        df_filtrado,
         x="STATUS",
         y="TAMANHO_TEXTO",
         color="STATUS",
@@ -418,26 +489,51 @@ with col6:
 
 st.subheader("Evolução mensal por status")
 
-if df_filtrado["ANO_MES"].notna().any():
+if (
+    df_filtrado["ANO_MES"].notna().any()
+    and df_filtrado["DATA"].notna().any()
+):
     mensal_status = (
         df_filtrado.groupby(["ANO_MES", "STATUS"], as_index=False)["CASOS"]
         .sum()
-        .sort_values("ANO_MES")
     )
-
-    fig_mensal = px.line(
-        mensal_status,
-        x="ANO_MES",
-        y="CASOS",
-        color="STATUS",
-        markers=True
+    dmin = df_filtrado["DATA"].min()
+    dmax = df_filtrado["DATA"].max()
+    todas_meses = pd.period_range(
+        dmin.to_period("M"),
+        dmax.to_period("M"),
+        freq="M",
     )
-    fig_mensal.update_layout(
-        height=420,
-        xaxis_title="Ano-Mês",
-        yaxis_title="Casos"
-    )
-    st.plotly_chart(fig_mensal, width="stretch")
+    todas_str = [str(p) for p in todas_meses]
+    statuses = sorted(df_filtrado["STATUS"].dropna().unique().tolist())
+    if statuses and todas_str:
+        idx = pd.MultiIndex.from_product(
+            [todas_str, statuses],
+            names=["ANO_MES", "STATUS"],
+        )
+        mensal_status = (
+            mensal_status.set_index(["ANO_MES", "STATUS"])
+            .reindex(idx, fill_value=0)
+            .reset_index()
+            .sort_values(["ANO_MES", "STATUS"])
+        )
+        fig_mensal = px.line(
+            mensal_status,
+            x="ANO_MES",
+            y="CASOS",
+            color="STATUS",
+            markers=True,
+            category_orders={"ANO_MES": todas_str},
+        )
+        fig_mensal.update_layout(
+            height=420,
+            xaxis_title="Ano-Mês",
+            yaxis_title="Casos",
+        )
+        fig_mensal.update_xaxes(type="category", tickangle=45)
+        st.plotly_chart(fig_mensal, width="stretch")
+    else:
+        st.info("Não há status ou meses suficientes para a evolução mensal.")
 else:
     st.info("Não há datas válidas para gerar a evolução mensal.")
 
@@ -451,13 +547,163 @@ if texto_total:
 else:
     st.info("Não há textos suficientes para gerar a WordCloud.")
 
+st.divider()
+st.subheader("Análise Operacional e Regional")
+
+col7, col8 = st.columns(2)
+
+with col7:
+    st.markdown("**Top 10 cidades com mais reclamações**")
+    if "LOCAL" in df_filtrado.columns:
+        df_cidades = df_filtrado.groupby("LOCAL", as_index=False)["CASOS"].sum()
+        df_cidades = df_cidades.sort_values("CASOS", ascending=False).head(10)
+        df_cidades = df_cidades.sort_values("CASOS", ascending=True)
+        fig_cid = px.bar(
+            df_cidades,
+            x="CASOS",
+            y="LOCAL",
+            orientation="h",
+            text_auto=True,
+            color_discrete_sequence=["#ef553b"],
+        )
+        fig_cid.update_layout(
+            height=400,
+            xaxis_title="Casos",
+            yaxis_title="",
+            margin=dict(l=0, r=0, t=30, b=0),
+        )
+        st.plotly_chart(fig_cid, width="stretch")
+    else:
+        st.info("Coluna LOCAL não disponível nos dados.")
+
+with col8:
+    st.markdown("**Reclamações por dia da semana**")
+    if "DIA_DA_SEMANA" in df_filtrado.columns:
+        mapa_dias = {
+            0: "Segunda",
+            1: "Terça",
+            2: "Quarta",
+            3: "Quinta",
+            4: "Sexta",
+            5: "Sábado",
+            6: "Domingo",
+        }
+        df_dias = df_filtrado.copy()
+        df_dias["DIA_DA_SEMANA"] = pd.to_numeric(df_dias["DIA_DA_SEMANA"], errors="coerce")
+        df_dias = df_dias.dropna(subset=["DIA_DA_SEMANA"])
+        if not df_dias.empty:
+            df_dias["DIA_DA_SEMANA"] = df_dias["DIA_DA_SEMANA"].astype(int)
+            df_dias = df_dias.groupby("DIA_DA_SEMANA", as_index=False)["CASOS"].sum()
+            df_dias["Nome do Dia"] = df_dias["DIA_DA_SEMANA"].map(mapa_dias)
+            df_dias = df_dias.dropna(subset=["Nome do Dia"])
+            ordem_dias = [
+                "Segunda", "Terça", "Quarta", "Quinta",
+                "Sexta", "Sábado", "Domingo",
+            ]
+            fig_dias = px.bar(
+                df_dias,
+                x="Nome do Dia",
+                y="CASOS",
+                text_auto=True,
+                category_orders={"Nome do Dia": ordem_dias},
+                color_discrete_sequence=["#636efa"],
+            )
+            fig_dias.update_layout(
+                height=400,
+                xaxis_title="",
+                yaxis_title="Casos",
+                margin=dict(l=0, r=0, t=30, b=0),
+            )
+            st.plotly_chart(fig_dias, width="stretch")
+        else:
+            st.info("Sem valores válidos em DIA_DA_SEMANA.")
+    else:
+        st.info("Coluna DIA_DA_SEMANA não disponível nos dados.")
+
+st.subheader("Principais queixas e dores dos clientes")
+
+# Nomes das colunas dummy no CSV após normalização (maiúsculas em carregar_dados)
+colunas_problemas_chave = [
+    "ADMINISTRATIVO",
+    "ATRASO NA ENTREGA",
+    "CLÍNICAS MÉDICAS",
+    "COBRANÇA INDEVIDA",
+    "DEMORA PARA AUTORIZAÇÃO DE CONSULTAS, EXAMES E CIRURGIAS",
+    "DIFICULDADE PARA AGENDAMENTO DE EXAMES-CONSULTAS",
+    "EXAMES LAB E IMAGENS",
+    "MAU ATENDIMENTO",
+    "PROBLEMAS DE INFRAESTRUTURA",
+    "QUALIDADE DO SERVIÇO",
+    "QUALIDADE DO SERVIÇO PRESTADO",
+    "REDE DE ATENDIMENTO",
+    "REEMBOLSO DE PAGAMENTO",
+]
+rotulo_problema = {
+    "ADMINISTRATIVO": "Administrativo",
+    "ATRASO NA ENTREGA": "Atraso na entrega",
+    "CLÍNICAS MÉDICAS": "Clínicas médicas",
+    "COBRANÇA INDEVIDA": "Cobrança indevida",
+    "DEMORA PARA AUTORIZAÇÃO DE CONSULTAS, EXAMES E CIRURGIAS": (
+        "Demora para autorização de consultas, exames e cirurgias"
+    ),
+    "DIFICULDADE PARA AGENDAMENTO DE EXAMES-CONSULTAS": (
+        "Dificuldade para agendamento de exames-consultas"
+    ),
+    "EXAMES LAB E IMAGENS": "Exames lab e imagens",
+    "MAU ATENDIMENTO": "Mau atendimento",
+    "PROBLEMAS DE INFRAESTRUTURA": "Problemas de infraestrutura",
+    "QUALIDADE DO SERVIÇO": "Qualidade do serviço",
+    "QUALIDADE DO SERVIÇO PRESTADO": "Qualidade do serviço prestado",
+    "REDE DE ATENDIMENTO": "Rede de atendimento",
+    "REEMBOLSO DE PAGAMENTO": "Reembolso de pagamento",
+}
+colunas_existentes = [c for c in colunas_problemas_chave if c in df_filtrado.columns]
+
+if colunas_existentes:
+    df_problemas = df_filtrado[colunas_existentes].sum().reset_index()
+    df_problemas.columns = ["_chave", "Total de Casos"]
+    df_problemas["Problema"] = df_problemas["_chave"].map(rotulo_problema).fillna(
+        df_problemas["_chave"]
+    )
+    df_problemas = df_problemas.drop(columns=["_chave"])
+    df_problemas = df_problemas[df_problemas["Total de Casos"] > 0].sort_values(
+        "Total de Casos", ascending=True
+    )
+    fig_prob = px.bar(
+        df_problemas,
+        x="Total de Casos",
+        y="Problema",
+        orientation="h",
+        text_auto=True,
+        color="Total de Casos",
+        color_continuous_scale="Reds",
+    )
+    fig_prob.update_layout(
+        height=500,
+        xaxis_title="Quantidade de casos reportados",
+        yaxis_title="",
+        showlegend=False,
+    )
+    st.plotly_chart(fig_prob, width="stretch")
+else:
+    st.info("Não há colunas de problemas dummy no conjunto de dados filtrado.")
+
 st.subheader("Amostra dos dados filtrados")
 
 colunas_tabela = [
-    c for c in [
-        "DATA", "ESTADO", "STATUS", "CATEGORIA_AJUSTADA",
-        "TAMANHO_TEXTO", "DESCRICAO"
-    ] if c in df_filtrado.columns
+    c
+    for c in [
+        "DATA",
+        "ESTADO",
+        "LOCAL",
+        "TEMA",
+        "STATUS",
+        "CATEGORIA_AJUSTADA",
+        "TAMANHO_TEXTO",
+        "DESCRICAO",
+        "URL",
+    ]
+    if c in df_filtrado.columns
 ]
 
 df_tabela = df_filtrado[colunas_tabela].copy()
@@ -465,4 +711,23 @@ df_tabela = df_filtrado[colunas_tabela].copy()
 if "DATA" in df_tabela.columns:
     df_tabela = df_tabela.sort_values("DATA", ascending=False)
 
-st.dataframe(df_tabela.head(50), width="stretch")
+cfg_tabela = {}
+if "URL" in df_tabela.columns:
+    cfg_tabela["URL"] = st.column_config.LinkColumn(
+        "Link direto", display_text="Acessar reclamação"
+    )
+if "DATA" in df_tabela.columns:
+    cfg_tabela["DATA"] = st.column_config.DateColumn(
+        "Data da ocorrência", format="DD/MM/YYYY"
+    )
+if "TEMA" in df_tabela.columns:
+    cfg_tabela["TEMA"] = "Título da reclamação"
+if "LOCAL" in df_tabela.columns:
+    cfg_tabela["LOCAL"] = "Cidade"
+
+st.dataframe(
+    df_tabela.head(50),
+    width="stretch",
+    hide_index=True,
+    column_config=cfg_tabela,
+)
